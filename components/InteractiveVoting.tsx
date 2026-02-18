@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Minus, Plus, QrCode, Timer as TimerIcon, CheckCircle2, X } from 'lucide-react';
-import { MOCK_GUESTS } from '../constants';
-import { VoteOption, Voter } from '../types';
+import { VoteOption, Voter, WsVoteCastPayload } from '../types';
+import { wsService } from '../services/wsService';
 
 interface Props {
   onVotingEnd: (voters: Voter[]) => void;
@@ -16,31 +16,47 @@ interface Props {
   setParticipants: React.Dispatch<React.SetStateAction<Voter[]>>;
 }
 
-const InteractiveVoting: React.FC<Props> = ({ 
-  onVotingEnd, phase, setPhase, options, setOptions, 
-  secondsRemaining, setSecondsRemaining, participants, setParticipants 
+const InteractiveVoting: React.FC<Props> = ({
+  onVotingEnd, phase, setPhase, options, setOptions,
+  secondsRemaining, setSecondsRemaining, participants, setParticipants
 }) => {
   const [setupTime, setSetupTime] = useState(10);
   const [activePopup, setActivePopup] = useState<'step1' | 'step2' | null>(null);
-  
+
+  // 倒數計時
   useEffect(() => {
     let timer: number;
     if (phase === 'ACTIVE' && secondsRemaining > 0) {
       timer = window.setInterval(() => {
         setSecondsRemaining((prev) => prev - 1);
-        if (Math.random() > 0.4) {
-          const randomIdx = Math.floor(Math.random() * options.length);
-          const randomGuest = MOCK_GUESTS[Math.floor(Math.random() * MOCK_GUESTS.length)];
-          setOptions(prev => prev.map((opt, i) => i === randomIdx ? { ...opt, count: opt.count + 1 } : opt));
-          setParticipants(prev => [...prev, { id: Math.random().toString(), name: randomGuest, choice: options[randomIdx].label }]);
-        }
       }, 1000);
     } else if (phase === 'ACTIVE' && secondsRemaining === 0) {
       setPhase('RESULTS');
       onVotingEnd(participants);
     }
     return () => clearInterval(timer);
-  }, [phase, secondsRemaining, options.length, setOptions, setParticipants, setPhase, onVotingEnd, participants]);
+  }, [phase, secondsRemaining, setSecondsRemaining, setPhase, onVotingEnd, participants]);
+
+  // 訂閱 WebSocket 投票事件
+  useEffect(() => {
+    const handleVoteCast = (payload: WsVoteCastPayload) => {
+      if (phase !== 'ACTIVE') return;
+
+      setOptions(prev => prev.map(opt =>
+        opt.id === payload.optionId ? { ...opt, count: opt.count + 1 } : opt
+      ));
+      setParticipants(prev => [...prev, {
+        id: payload.voterId,
+        name: payload.voterName,
+        choice: payload.optionId,
+      }]);
+    };
+
+    wsService.on('vote:cast', handleVoteCast);
+    return () => {
+      wsService.off('vote:cast', handleVoteCast);
+    };
+  }, [phase, setOptions, setParticipants]);
 
   const startVoting = () => {
     setOptions(options.map(o => ({ ...o, count: 0 })));
@@ -60,12 +76,12 @@ const InteractiveVoting: React.FC<Props> = ({
             <h2 className="text-3xl sm:text-4xl md:text-6xl font-black text-white uppercase tracking-widest mb-2">VOTING MODE ON</h2>
             <div className="w-12 h-1 bg-[#E11D48] mx-auto rounded-full" />
           </div>
-          
+
           <div className="flex flex-col items-center gap-6 bg-white/5 p-6 md:p-10 rounded-[1.5rem] md:rounded-[2.5rem] w-full max-w-md border border-white/5">
             <span className="text-white/40 text-[9px] md:text-[10px] font-bold uppercase tracking-[0.2em] md:tracking-[0.3em]">Voting Time (min)</span>
             <div className="flex items-center gap-6 md:gap-10">
-              <button 
-                onClick={() => setSetupTime(p => Math.max(1, p - 1))} 
+              <button
+                onClick={() => setSetupTime(p => Math.max(1, p - 1))}
                 className="w-12 h-12 md:w-16 md:h-16 rounded-full border-2 border-white/10 flex items-center justify-center text-xl md:text-2xl hover:bg-[#E11D48] transition-all"
               >
                 <Minus size={20} />
@@ -73,15 +89,15 @@ const InteractiveVoting: React.FC<Props> = ({
               <div className="flex flex-col items-center">
                 <span className="text-6xl md:text-8xl font-bold text-white leading-none">{setupTime}</span>
               </div>
-              <button 
-                onClick={() => setSetupTime(p => Math.min(15, p + 1))} 
+              <button
+                onClick={() => setSetupTime(p => Math.min(15, p + 1))}
                 className="w-12 h-12 md:w-16 md:h-16 rounded-full border-2 border-white/10 flex items-center justify-center text-xl md:text-2xl hover:bg-[#E11D48] transition-all"
               >
                 <Plus size={20} />
               </button>
             </div>
           </div>
-          
+
           <button onClick={startVoting} className="bg-[#E11D48] text-white py-4 md:py-6 px-16 md:px-24 rounded-2xl md:rounded-[2rem] text-2xl md:text-4xl font-black hover:scale-105 transition-transform shadow-lg tracking-[0.2em] md:tracking-widest">
             START
           </button>
@@ -93,7 +109,7 @@ const InteractiveVoting: React.FC<Props> = ({
   if (phase === 'ACTIVE') {
     const totalSetupSeconds = setupTime * 60;
     const progress = (secondsRemaining / totalSetupSeconds) * 100;
-    
+
     return (
       <div className="w-full h-full flex flex-col items-center justify-center bg-black px-6 pt-32 md:pt-40 lg:pt-48 pb-20 overflow-hidden">
         <div className="w-full flex flex-col items-center gap-8 md:gap-10 max-w-5xl">
@@ -103,12 +119,12 @@ const InteractiveVoting: React.FC<Props> = ({
                 猜猜看新娘下一套禮服的顏色？
               </h2>
               <p className="text-xs md:text-sm text-white/60 tracking-[0.1em] md:tracking-[0.2em] uppercase font-medium">
-                Let’s guess the color of the bride’s next dress
+                Let's guess the color of the bride's next dress
               </p>
             </div>
             <div className="w-16 md:w-20 h-1 bg-[#E11D48] mx-auto mt-4 rounded-full" />
           </div>
-          
+
           <div className={`flex flex-wrap justify-center gap-6 md:gap-10 transition-all duration-500 ${activePopup ? 'opacity-10 blur-md scale-90' : 'opacity-100'}`}>
              <InstructionCard step="01" label="Scan QR Code" onClick={() => setActivePopup('step1')} icon={<QrCode className="size-10 md:size-[60px]" />} />
              <InstructionCard step="02" label="Submit Choice" onClick={() => setActivePopup('step2')} icon={<TimerIcon className="size-10 md:size-[60px]" />} isPrimary />
@@ -124,7 +140,7 @@ const InteractiveVoting: React.FC<Props> = ({
              </div>
           </div>
         </div>
-        
+
         {/* Popup Overlay */}
         {activePopup && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-xl animate-in fade-in duration-500 p-6" onClick={() => setActivePopup(null)}>
@@ -132,12 +148,12 @@ const InteractiveVoting: React.FC<Props> = ({
                <button onClick={() => setActivePopup(null)} className="absolute top-6 right-6 md:top-8 md:right-8 text-white/40 hover:text-[#E11D48] transition-colors">
                  <X size={24} md:size={32} />
                </button>
-               
+
                <h3 className="text-xl md:text-3xl font-bold text-white tracking-[0.1em] md:tracking-widest uppercase text-center">{activePopup === 'step1' ? '掃描 QR Code 進入投票' : '選擇顏色並送出'}</h3>
                <div className="bg-white p-6 md:p-10 rounded-[1.5rem] md:rounded-[2.5rem] shadow-xl transform transition-transform duration-500 hover:scale-105">
                  {activePopup === 'step1' ? <QrCode className="size-48 md:size-[280px]" color="#000" /> : <TimerIcon className="size-48 md:size-[280px] animate-pulse" color="#E11D48" />}
                </div>
-               
+
                <div className="flex flex-col items-center gap-3">
                  <p className="text-white/40 text-[10px] md:text-sm tracking-[0.2em] md:tracking-[0.3em] font-medium uppercase">
                    {activePopup === 'step1' ? 'Step 01: Scan with Camera' : 'Step 02: Pick your favorite'}

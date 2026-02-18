@@ -1,7 +1,8 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { MediaItem, SchemeId } from '../types';
-import { Upload, Eye, EyeOff, Trash2, MessageSquare, MessageSquareOff, Clock, Pin, Video, Image as ImageIcon, GripVertical, CheckCircle2, Plus, X, Check, Edit2, AlertCircle } from 'lucide-react';
+import { Upload, Eye, EyeOff, Trash2, MessageSquare, MessageSquareOff, Pin, Video, Image as ImageIcon, CheckCircle2, Plus, X, Check, Edit2, AlertCircle, Loader2 } from 'lucide-react';
+import { requestPresignedUrls, uploadFileToR2, reorderMedia, toggleMediaVisibility, deleteMedia } from '../services/apiService';
 
 interface Props {
   schemeIds: SchemeId[];
@@ -52,6 +53,8 @@ const ControlPanel: React.FC<Props> = ({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [confirmSchemeDeleteId, setConfirmSchemeDeleteId] = useState<SchemeId | null>(null);
 
+  const [isUploading, setIsUploading] = useState(false);
+
   const currentMediaList = schemes[editingScheme] || [];
 
   const handleAddSchemeConfirm = (e: React.FormEvent | React.MouseEvent) => {
@@ -83,35 +86,76 @@ const ControlPanel: React.FC<Props> = ({
     setConfirmSchemeDeleteId(null);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files) {
-      const newItems: MediaItem[] = (Array.from(files) as File[]).map(file => ({
-        id: Math.random().toString(36).substr(2, 9),
-        url: URL.createObjectURL(file),
-        type: file.type.startsWith('video') ? 'video' : 'image',
-        visible: true
-      }));
-      updateSchemeMedia(editingScheme, [...newItems, ...currentMediaList]);
+    if (!files || files.length === 0) return;
+
+    const fileArray = Array.from(files);
+    setIsUploading(true);
+
+    try {
+      // 1. Request presigned URLs from backend
+      const fileMeta = fileArray.map(f => ({ name: f.name, type: f.type, size: f.size }));
+      const { items } = await requestPresignedUrls(editingScheme, fileMeta);
+
+      // 2. Upload each file to R2 in parallel
+      await Promise.all(
+        items.map((item, idx) => uploadFileToR2(item.uploadUrl, fileArray[idx]))
+      );
+
+      // 3. Update local state with the mediaItems returned by the API
+      const newMediaItems = items.map(item => item.mediaItem);
+      updateSchemeMedia(editingScheme, [...newMediaItems, ...currentMediaList]);
+    } catch (err) {
+      console.error('Failed to upload files:', err);
+    } finally {
+      setIsUploading(false);
+      // Reset input so the same files can be re-selected
+      e.target.value = '';
     }
   };
 
-  const executeDeleteMedia = (id: string, e: React.MouseEvent) => {
+  const executeDeleteMedia = async (id: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    const prevList = currentMediaList;
+    // Optimistic update
     const newList = currentMediaList.filter(m => m.id !== id);
     updateSchemeMedia(editingScheme, newList);
     if (pinnedMediaIds[editingScheme] === id) {
       setPinnedMediaIdForScheme(editingScheme, null);
     }
     setConfirmDeleteId(null);
+
+    try {
+      await deleteMedia(editingScheme, id);
+    } catch (err) {
+      console.error('Failed to delete media:', err);
+      // Rollback
+      updateSchemeMedia(editingScheme, prevList);
+    }
   };
 
-  const toggleVisibility = (id: string, e: React.MouseEvent) => {
+  const toggleVisibility = async (id: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const newList = currentMediaList.map(m => m.id === id ? { ...m, visible: !m.visible } : m);
+
+    const item = currentMediaList.find(m => m.id === id);
+    if (!item) return;
+
+    const newVisible = !item.visible;
+    const prevList = currentMediaList;
+    // Optimistic update
+    const newList = currentMediaList.map(m => m.id === id ? { ...m, visible: newVisible } : m);
     updateSchemeMedia(editingScheme, newList);
+
+    try {
+      await toggleMediaVisibility(editingScheme, id, newVisible);
+    } catch (err) {
+      console.error('Failed to toggle visibility:', err);
+      updateSchemeMedia(editingScheme, prevList);
+    }
   };
 
   const handlePinToggle = (id: string, e: React.MouseEvent) => {
@@ -130,6 +174,14 @@ const ControlPanel: React.FC<Props> = ({
     newList.splice(idx, 0, item);
     updateSchemeMedia(editingScheme, newList);
     setDraggedIndex(idx);
+  };
+  const onDragEnd = () => {
+    setDraggedIndex(null);
+    // Persist the final order to API
+    const itemIds = (schemes[editingScheme] || []).map(m => m.id);
+    reorderMedia(editingScheme, itemIds).catch(err => {
+      console.error('Failed to reorder media:', err);
+    });
   };
 
   return (
@@ -230,9 +282,10 @@ const ControlPanel: React.FC<Props> = ({
               )}
             </div>
             
-            <label className="cursor-pointer bg-[#E11D48] text-white px-6 md:px-8 py-2.5 md:py-3.5 rounded-full font-bold hover:scale-105 transition-all flex items-center gap-2 shadow-[0_0_20px_rgba(225,29,72,0.3)] flex-shrink-0 text-xs sm:text-sm">
-              <Upload size={16} /> 上傳至 {editingScheme}
-              <input type="file" multiple accept="image/*,video/*" className="hidden" onChange={handleFileUpload} />
+            <label className={`bg-[#E11D48] text-white px-6 md:px-8 py-2.5 md:py-3.5 rounded-full font-bold transition-all flex items-center gap-2 shadow-[0_0_20px_rgba(225,29,72,0.3)] flex-shrink-0 text-xs sm:text-sm ${isUploading ? 'opacity-60 cursor-wait' : 'cursor-pointer hover:scale-105'}`}>
+              {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+              {isUploading ? '上傳中...' : `上傳至 ${editingScheme}`}
+              <input type="file" multiple accept="image/*,video/*" className="hidden" onChange={handleFileUpload} disabled={isUploading} />
             </label>
           </div>
         </div>
@@ -311,7 +364,7 @@ const ControlPanel: React.FC<Props> = ({
                     draggable
                     onDragStart={() => onDragStart(idx)}
                     onDragOver={(e) => onDragOver(e, idx)}
-                    onDragEnd={() => setDraggedIndex(null)}
+                    onDragEnd={onDragEnd}
                     className={`relative aspect-[16/10] rounded-2xl md:rounded-3xl overflow-hidden glass-card group border-2 transition-all duration-300 cursor-grab active:cursor-grabbing hover:scale-[1.02] ${
                       draggedIndex === idx ? 'opacity-20 scale-95 border-dashed border-white/50' : 'opacity-100 border-white/5 shadow-xl'
                     } ${pinnedMediaIds[editingScheme] === media.id ? 'border-[#E11D48] ring-4 ring-[#E11D48]/20' : ''}`}

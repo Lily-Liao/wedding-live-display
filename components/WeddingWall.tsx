@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { QrCode, Heart } from 'lucide-react';
-import { INITIAL_MESSAGES, ROSE_GOLD, MOCK_GUESTS } from '../constants';
-import { GuestMessage, MediaItem } from '../types';
-import { generateRomanticWish } from '../services/geminiService';
+import { ROSE_GOLD } from '../constants';
+import { GuestMessage, MediaItem, WsMessagePayload } from '../types';
+import { fetchMessages } from '../services/apiService';
+import { wsService } from '../services/wsService';
 
 interface Props {
   mediaList: MediaItem[];
@@ -14,16 +15,16 @@ interface Props {
 }
 
 const WeddingWall: React.FC<Props> = ({ mediaList, showWallMessages, pinnedMediaId, slideshowSpeed, messageScrollSpeed }) => {
-  const [messages, setMessages] = useState<GuestMessage[]>(INITIAL_MESSAGES);
+  const [messages, setMessages] = useState<GuestMessage[]>([]);
   const [currentMediaIndex, setCurrentMediaIndex] = useState(0);
-  
+
   // 雙層渲染狀態
   const [bottomMedia, setBottomMedia] = useState<MediaItem | null>(null);
   const [topMedia, setTopMedia] = useState<MediaItem | null>(null);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
   const visibleMedia = useMemo(() => mediaList.filter(m => m.visible), [mediaList]);
-  
+
   const currentMedia = useMemo(() => {
     if (pinnedMediaId) {
       return mediaList.find(m => m.id === pinnedMediaId) || null;
@@ -55,7 +56,7 @@ const WeddingWall: React.FC<Props> = ({ mediaList, showWallMessages, pinnedMedia
     setTopMedia(currentMedia);
 
     if (transitionTimeout.current) window.clearTimeout(transitionTimeout.current);
-    
+
     transitionTimeout.current = window.setTimeout(() => {
       setBottomMedia(currentMedia);
       setIsTransitioning(false);
@@ -89,25 +90,38 @@ const WeddingWall: React.FC<Props> = ({ mediaList, showWallMessages, pinnedMedia
     }
   };
 
-  // 模擬留言
+  // 從 API 載入歷史訊息 + WebSocket 接收新訊息
   useEffect(() => {
-    const interval = setInterval(async () => {
-      const randomGuest = MOCK_GUESTS[Math.floor(Math.random() * MOCK_GUESTS.length)];
-      const wish = await generateRomanticWish(randomGuest);
+    fetchMessages()
+      .then((msgs) => setMessages(msgs))
+      .catch((err) => console.error('Failed to fetch messages:', err));
+
+    const handleNewMessage = (payload: WsMessagePayload) => {
       const newMessage: GuestMessage = {
-        id: Math.random().toString(36).substr(2, 9),
-        name: randomGuest,
-        content: wish,
-        timestamp: Date.now()
+        id: payload.id,
+        name: payload.name,
+        content: payload.content,
+        timestamp: payload.timestamp,
       };
-      setMessages(prev => [...prev, newMessage]);
-    }, 12000);
-    return () => clearInterval(interval);
+      setMessages(prev => {
+        const newMessages = [...prev, newMessage];
+        if (newMessages.length > 50) {
+          return newMessages.slice(newMessages.length - 50);
+        }
+        return newMessages;
+      });
+    };
+
+    wsService.on('message:new', handleNewMessage);
+
+    return () => {
+      wsService.off('message:new', handleNewMessage);
+    };
   }, []);
 
   const renderMedia = (media: MediaItem | null, isTop: boolean) => {
     if (!media) return null;
-    
+
     if (media.type === 'image') {
       return (
         <div
@@ -138,10 +152,9 @@ const WeddingWall: React.FC<Props> = ({ mediaList, showWallMessages, pinnedMedia
         {renderMedia(bottomMedia, false)}
       </div>
 
-      <div 
-        className={`absolute inset-0 z-10 transition-opacity duration-[1500ms] ease-in-out will-change-opacity ${
-          isTransitioning ? 'opacity-100' : 'opacity-0'
-        }`}
+      <div
+        className={`absolute inset-0 z-10 transition-opacity duration-[1500ms] ease-in-out will-change-opacity ${isTransitioning ? 'opacity-100' : 'opacity-0'
+          }`}
       >
         {renderMedia(topMedia, true)}
       </div>
@@ -149,11 +162,11 @@ const WeddingWall: React.FC<Props> = ({ mediaList, showWallMessages, pinnedMedia
       <div className="absolute inset-0 z-20 bg-black/40 pointer-events-none" />
 
       {/* 留言牆 */}
-      {showWallMessages && (
+      {showWallMessages && messages.length > 0 && (
         <div className="absolute inset-0 flex items-center justify-end pr-16 pt-32 pb-24 z-30 animate-in fade-in slide-in-from-right-10 duration-1000">
           <div className="w-[450px] h-full overflow-hidden mask-linear-gradient flex flex-col">
-            <div 
-              className="animate-scroll flex flex-col gap-5" 
+            <div
+              className="animate-scroll flex flex-col gap-5"
               style={{ animationDuration: `${messageScrollSpeed}s` }}
             >
               {[...messages, ...messages].map((msg, idx) => (
@@ -175,7 +188,7 @@ const WeddingWall: React.FC<Props> = ({ mediaList, showWallMessages, pinnedMedia
         <div className="flex flex-col items-center group transition-all duration-500 hover:scale-105">
           <div className="bg-black/70 backdrop-blur-3xl border border-white/10 p-4 rounded-[2.5rem] flex flex-col items-center gap-4 shadow-2xl rose-gold-glow">
             <div className="bg-white p-3 rounded-[1.8rem] shadow-inner">
-               <QrCode size={110} color="#000" />
+              <QrCode size={110} color="#000" />
             </div>
             <div className="w-full flex flex-col items-center justify-center py-1">
               <span className="text-[#FDE68A] text-xl font-bold tracking-[0.2em] whitespace-nowrap leading-tight drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">
