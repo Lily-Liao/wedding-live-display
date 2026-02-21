@@ -6,21 +6,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>歲月敬好Ｘ共度玗生</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        /* Assumption: The user will place their wedding-font.woff2 in the project root */
         @font-face {
             font-family: 'CustomWeddingFont';
-            src: url('./wedding-font.woff2') format('woff2');
+            src: url('/fonts/Iansui-Regular.woff2') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }
+
+        @font-face {
+            font-family: 'ChenYuluoyanThin';
+            src: url('/fonts/ChenYuluoyan-2.0-Thin.woff2') format('woff2');
             font-weight: normal;
             font-style: normal;
             font-display: swap;
         }
 
         body {
-            font-family: 'CustomWeddingFont', 'Klee One', cursive;
+            font-family: 'CustomWeddingFont', cursive;
+            font-size: 22px;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
             background-color: #000;
             color: #fff;
             overflow: hidden;
@@ -79,6 +87,20 @@
 
         .mask-linear-gradient {
             mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
+        }
+
+        @keyframes messageSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .animate-msg-in {
+            animation: messageSlideIn 0.5s ease-out both;
         }
     </style>
 <script type="importmap">

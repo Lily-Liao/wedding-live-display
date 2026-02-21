@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Minus, Plus, QrCode, Timer as TimerIcon, CheckCircle2, X } from 'lucide-react';
-import { VoteOption, Voter, WsVoteCastPayload } from '../types';
-import { wsService } from '../services/wsService';
+import { Minus, Plus, CheckCircle2, X } from 'lucide-react';
+import { VoteOption, Voter } from '../types';
+import { updateVotingSessionStatus, fetchVoteOptions } from '../services/apiService';
 
 interface Props {
   onVotingEnd: (voters: Voter[]) => void;
@@ -21,7 +21,7 @@ const InteractiveVoting: React.FC<Props> = ({
   secondsRemaining, setSecondsRemaining, participants, setParticipants
 }) => {
   const [setupTime, setSetupTime] = useState(10);
-  const [activePopup, setActivePopup] = useState<'step1' | 'step2' | null>(null);
+  const [activePopup, setActivePopup] = useState<number | null>(null); // 0=step1, 1=step2, 2=step3
 
   // 倒數計時
   useEffect(() => {
@@ -31,35 +31,32 @@ const InteractiveVoting: React.FC<Props> = ({
         setSecondsRemaining((prev) => prev - 1);
       }, 1000);
     } else if (phase === 'ACTIVE' && secondsRemaining === 0) {
+      updateVotingSessionStatus('CLOSED').catch(err => {
+        console.error('Failed to close voting session:', err);
+      });
       setPhase('RESULTS');
       onVotingEnd(participants);
     }
     return () => clearInterval(timer);
   }, [phase, secondsRemaining, setSecondsRemaining, setPhase, onVotingEnd, participants]);
 
-  // 訂閱 WebSocket 投票事件
+  // 進入結果階段時，從 API 取得最終投票數據
   useEffect(() => {
-    const handleVoteCast = (payload: WsVoteCastPayload) => {
-      if (phase !== 'ACTIVE') return;
+    if (phase !== 'RESULTS') return;
+    fetchVoteOptions()
+      .then(({ options: apiOptions }) => setOptions(apiOptions))
+      .catch(err => console.error('Failed to fetch vote results:', err));
+  }, [phase]);
 
-      setOptions(prev => prev.map(opt =>
-        opt.id === payload.optionId ? { ...opt, count: opt.count + 1 } : opt
-      ));
-      setParticipants(prev => [...prev, {
-        id: payload.voterId,
-        name: payload.voterName,
-        choice: payload.optionId,
-      }]);
-    };
 
-    wsService.on('vote:cast', handleVoteCast);
-    return () => {
-      wsService.off('vote:cast', handleVoteCast);
-    };
-  }, [phase, setOptions, setParticipants]);
-
-  const startVoting = () => {
-    setOptions(options.map(o => ({ ...o, count: 0 })));
+  const startVoting = async () => {
+    try {
+      await updateVotingSessionStatus('START');
+    } catch (err) {
+      console.error('Failed to start voting session:', err);
+      return;
+    }
+    setOptions(options.map(o => ({ ...o, count: 0, percentage: 0 })));
     setParticipants([]);
     setSecondsRemaining(setupTime * 60);
     setPhase('ACTIVE');
@@ -67,6 +64,12 @@ const InteractiveVoting: React.FC<Props> = ({
 
   const totalVotes = options.reduce((acc, opt) => acc + opt.count, 0);
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+
+  const STEP_IMAGES = [
+    'https://img.wedding.kenny.work/schemes/e1cdc9f8-d2c1-47a5-acd2-a45ed345aa55/bc82e910-53a9-4434-9a08-c9525ab86f09/step1.jpg',
+    'https://img.wedding.kenny.work/schemes/e1cdc9f8-d2c1-47a5-acd2-a45ed345aa55/0cd245c7-1754-4dff-8f77-9efd5b316d43/step2.jpg',
+    'https://img.wedding.kenny.work/schemes/e1cdc9f8-d2c1-47a5-acd2-a45ed345aa55/dd0c18f8-1ca3-4da0-bb3b-f0e022cb1f65/step3.jpg',
+  ];
 
   if (phase === 'SETUP') {
     return (
@@ -113,7 +116,7 @@ const InteractiveVoting: React.FC<Props> = ({
     return (
       <div className="w-full h-full flex flex-col items-center justify-center bg-black px-6 pt-32 md:pt-40 lg:pt-48 pb-20 overflow-hidden">
         <div className="w-full flex flex-col items-center gap-8 md:gap-10 max-w-5xl">
-          <div className={`text-center transition-all duration-500 ${activePopup ? 'opacity-10 blur-md scale-90' : 'opacity-100'}`}>
+          <div className={`text-center opacity-100 transition-all duration-500 ${activePopup !== null ? 'opacity-10 blur-sm' : ''}`}>
             <div className="flex flex-col gap-2">
               <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-white tracking-[0.1em] md:tracking-[0.2em] leading-relaxed">
                 猜猜看新娘下一套禮服的顏色？
@@ -125,12 +128,13 @@ const InteractiveVoting: React.FC<Props> = ({
             <div className="w-16 md:w-20 h-1 bg-[#E11D48] mx-auto mt-4 rounded-full" />
           </div>
 
-          <div className={`flex flex-wrap justify-center gap-6 md:gap-10 transition-all duration-500 ${activePopup ? 'opacity-10 blur-md scale-90' : 'opacity-100'}`}>
-             <InstructionCard step="01" label="Scan QR Code" onClick={() => setActivePopup('step1')} icon={<QrCode className="size-10 md:size-[60px]" />} />
-             <InstructionCard step="02" label="Submit Choice" onClick={() => setActivePopup('step2')} icon={<TimerIcon className="size-10 md:size-[60px]" />} isPrimary />
+          <div className={`flex flex-wrap justify-center gap-5 md:gap-8 transition-all duration-500 ${activePopup !== null ? 'opacity-10 blur-sm scale-95 pointer-events-none' : ''}`}>
+            <InstructionCard step="1" imageUrl={STEP_IMAGES[0]} onClick={() => setActivePopup(0)} />
+            <InstructionCard step="2" imageUrl={STEP_IMAGES[1]} isPrimary onClick={() => setActivePopup(1)} />
+            <InstructionCard step="3" imageUrl={STEP_IMAGES[2]} onClick={() => setActivePopup(2)} />
           </div>
 
-          <div className={`transition-all duration-700 ${activePopup ? 'opacity-0 scale-75 translate-y-10' : 'opacity-100'}`}>
+          <div className={`transition-all duration-500 ${activePopup !== null ? 'opacity-10 blur-sm' : ''}`}>
              <div className="glass-card px-8 md:px-12 py-4 md:py-6 rounded-[1.5rem] md:rounded-[2.5rem] flex flex-col items-center bg-black/40 backdrop-blur-2xl border-white/10 relative overflow-hidden min-w-[280px] md:min-w-[360px]">
                 <span className="text-[#E11D48] text-[8px] md:text-[9px] tracking-[0.3em] md:tracking-[0.5em] uppercase font-black mb-1">Live Remaining Time</span>
                 <div className="text-5xl md:text-[6rem] font-bold font-mono text-white leading-none tracking-tighter">
@@ -141,38 +145,41 @@ const InteractiveVoting: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Popup Overlay */}
-        {activePopup && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-xl animate-in fade-in duration-500 p-6" onClick={() => setActivePopup(null)}>
-            <div className="glass-card rounded-[2rem] md:rounded-[3.5rem] p-8 md:p-12 flex flex-col items-center gap-6 md:gap-8 max-w-xl w-full border-white/10 shadow-2xl animate-in zoom-in duration-300 relative" onClick={e => e.stopPropagation()}>
-               <button onClick={() => setActivePopup(null)} className="absolute top-6 right-6 md:top-8 md:right-8 text-white/40 hover:text-[#E11D48] transition-colors">
-                 <X size={24} md:size={32} />
-               </button>
-
-               <h3 className="text-xl md:text-3xl font-bold text-white tracking-[0.1em] md:tracking-widest uppercase text-center">{activePopup === 'step1' ? '掃描 QR Code 進入投票' : '選擇顏色並送出'}</h3>
-               <div className="bg-white p-6 md:p-10 rounded-[1.5rem] md:rounded-[2.5rem] shadow-xl transform transition-transform duration-500 hover:scale-105">
-                 {activePopup === 'step1' ? <QrCode className="size-48 md:size-[280px]" color="#000" /> : <TimerIcon className="size-48 md:size-[280px] animate-pulse" color="#E11D48" />}
-               </div>
-
-               <div className="flex flex-col items-center gap-3">
-                 <p className="text-white/40 text-[10px] md:text-sm tracking-[0.2em] md:tracking-[0.3em] font-medium uppercase">
-                   {activePopup === 'step1' ? 'Step 01: Scan with Camera' : 'Step 02: Pick your favorite'}
-                 </p>
-                 <div className="h-1 w-10 md:w-12 bg-[#E11D48]/30 rounded-full" />
-               </div>
+        {/* Popup: enlarged step image */}
+        {activePopup !== null && (
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-xl animate-in fade-in duration-300 p-6"
+            onClick={() => setActivePopup(null)}
+          >
+            <div
+              className="relative flex flex-col items-center gap-4 animate-in zoom-in duration-300"
+              onClick={e => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setActivePopup(null)}
+                className="absolute -top-3 -right-3 z-10 w-10 h-10 rounded-full bg-black/80 border border-white/20 flex items-center justify-center text-white/60 hover:text-[#E11D48] hover:border-[#E11D48]/50 transition-colors"
+              >
+                <X size={18} />
+              </button>
+              <img
+                src={STEP_IMAGES[activePopup]}
+                alt={`Step ${activePopup + 1}`}
+                className="max-h-[72vh] max-w-[85vw] object-contain rounded-[1.5rem] shadow-2xl"
+              />
+              <span className="text-white/40 text-[10px] font-black tracking-[0.5em] uppercase">STEP {activePopup + 1}</span>
             </div>
 
-            {/* Popup 內部的右下角小計時器 - 響應式調整 */}
-            <div className="absolute bottom-6 right-6 md:bottom-12 md:right-12 z-[110] animate-in slide-in-from-bottom-10 duration-700 hidden sm:block">
-               <div className="glass-card px-6 md:px-10 py-4 md:py-7 rounded-[1.5rem] md:rounded-[2.5rem] border-[#E11D48]/50 rose-gold-glow flex flex-col items-center min-w-[200px] md:min-w-[280px] overflow-hidden bg-black/80 backdrop-blur-3xl shadow-2xl">
-                  <span className="text-[#E11D48] text-[8px] md:text-[10px] tracking-[0.3em] md:tracking-[0.5em] uppercase font-black mb-1 md:mb-2">Time Remaining</span>
-                  <div className="text-4xl md:text-6xl font-bold font-mono text-white tracking-tighter">
-                    {formatTime(secondsRemaining)}
-                  </div>
-                  <div className="w-full h-1 md:h-1.5 bg-white/10 mt-3 md:mt-5 rounded-full overflow-hidden">
-                    <div className="h-full bg-[#E11D48] transition-all duration-1000 ease-linear shadow-[0_0_15px_#E11D48]" style={{ width: `${progress}%` }} />
-                  </div>
-               </div>
+            {/* Countdown timer in bottom-right */}
+            <div className="absolute bottom-6 right-6 md:bottom-12 md:right-12 z-[110] animate-in slide-in-from-bottom-5 duration-500">
+              <div className="glass-card px-6 md:px-10 py-4 md:py-6 rounded-[1.5rem] md:rounded-[2.5rem] border-[#E11D48]/50 rose-gold-glow flex flex-col items-center min-w-[200px] md:min-w-[280px] overflow-hidden bg-black/80 backdrop-blur-3xl shadow-2xl">
+                <span className="text-[#E11D48] text-[8px] md:text-[10px] tracking-[0.3em] md:tracking-[0.5em] uppercase font-black mb-1 md:mb-2">Time Remaining</span>
+                <div className="text-4xl md:text-6xl font-bold font-mono text-white tracking-tighter">
+                  {formatTime(secondsRemaining)}
+                </div>
+                <div className="w-full h-1 bg-white/10 mt-3 rounded-full overflow-hidden">
+                  <div className="h-full bg-[#E11D48] transition-all duration-1000 ease-linear shadow-[0_0_15px_#E11D48]" style={{ width: `${progress}%` }} />
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -192,12 +199,12 @@ const InteractiveVoting: React.FC<Props> = ({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 w-full max-w-5xl items-start mb-16">
         {options.map((opt) => {
-          const perc = totalVotes === 0 ? 0 : Math.round((opt.count / totalVotes) * 100);
+          const perc = opt.percentage != null ? Math.round(opt.percentage) : (totalVotes === 0 ? 0 : Math.round((opt.count / totalVotes) * 100));
           return (
-            <div key={opt.id} className="glass-card px-6 md:px-10 py-6 md:py-8 rounded-[1.5rem] md:rounded-[2.5rem] flex items-center justify-between relative overflow-hidden group hover:bg-white/[0.08] transition-all border-white/5">
+            <div key={opt.key} className="glass-card px-6 md:px-10 py-6 md:py-8 rounded-[1.5rem] md:rounded-[2.5rem] flex items-center justify-between relative overflow-hidden group hover:bg-white/[0.08] transition-all border-white/5">
               <div className="absolute bottom-0 left-0 h-1.5 transition-all duration-[1.5s] ease-out" style={{ backgroundColor: opt.color, width: `${perc}%`, boxShadow: `0 0 15px ${opt.color}` }} />
               <div className="flex flex-col">
-                <span className="text-2xl md:text-4xl font-black text-[#E11D48] opacity-80 group-hover:opacity-100 transition-opacity mb-1">{opt.id}</span>
+                <span className="text-2xl md:text-4xl font-black text-[#E11D48] opacity-80 group-hover:opacity-100 transition-opacity mb-1">{opt.key}</span>
                 <span className="text-base md:text-xl font-bold text-white tracking-widest">{opt.label}</span>
               </div>
               <div className="flex flex-col items-end">
@@ -220,13 +227,19 @@ const InteractiveVoting: React.FC<Props> = ({
   );
 };
 
-const InstructionCard = ({ step, label, onClick, icon, isPrimary }: any) => (
-  <button onClick={onClick} className={`w-[140px] md:w-[220px] aspect-[9/12] rounded-[1.5rem] md:rounded-[3rem] border-2 md:border-4 transition-all flex flex-col items-center justify-center gap-4 md:gap-6 group ${isPrimary ? 'border-[#E11D48] shadow-lg bg-[#E11D48]/5' : 'border-white/10 hover:border-white/30 hover:bg-white/5'}`}>
-    <div className={`p-4 md:p-6 rounded-[1rem] md:rounded-[1.5rem] transition-transform duration-500 group-hover:scale-110 ${isPrimary ? 'bg-[#E11D48] text-white' : 'bg-white text-black'}`}>{icon}</div>
-    <div className="text-center px-2">
-      <span className="text-xs md:text-xl font-black text-white tracking-widest">STEP {step}</span>
-      <div className="h-0.5 md:h-1 w-6 md:w-8 bg-[#E11D48]/40 mx-auto my-1 md:my-2 rounded-full" />
-      <span className="text-[8px] md:text-[9px] text-[#E11D48] font-bold uppercase tracking-[0.1em]">{label}</span>
+const InstructionCard = ({ step, imageUrl, isPrimary, onClick }: { step: string; imageUrl: string; isPrimary?: boolean; onClick: () => void }) => (
+  <button
+    onClick={onClick}
+    className={`w-[155px] md:w-[235px] rounded-[1.5rem] md:rounded-[2.5rem] border-2 overflow-hidden flex flex-col transition-all duration-300 hover:scale-[1.04] hover:shadow-2xl active:scale-95 ${isPrimary ? 'border-[#E11D48] shadow-[0_0_24px_rgba(225,29,72,0.35)]' : 'border-white/15 hover:border-white/35'}`}
+  >
+    <img
+      src={imageUrl}
+      alt={`Step ${step}`}
+      className="w-full aspect-[3/4] object-cover"
+      style={{ imageRendering: 'auto' }}
+    />
+    <div className="py-2 flex items-center justify-center bg-black/80">
+      <span className="text-[9px] md:text-[11px] font-black text-white tracking-[0.25em] uppercase">STEP {step}</span>
     </div>
   </button>
 );

@@ -8,6 +8,8 @@ export enum AppMode {
 
 export type SchemeId = string;
 
+// --- Frontend MediaItem (used across components) ---
+
 export interface MediaItem {
   id: string;
   url: string;
@@ -15,12 +17,57 @@ export interface MediaItem {
   visible: boolean;
 }
 
+// --- Backend API Response Types ---
+
+export interface ApiResponse<T> {
+  success: boolean;
+  message?: string;
+  data: T;
+}
+
+export interface BackendMediaItem {
+  id: string;
+  fileKey: string;
+  readUrl: string;
+  fileName: string;
+  contentType: string;
+  fileSize: number;
+  sortOrder: number;
+  isVisible: boolean;
+  createdAt: string;
+}
+
+export interface BackendScheme {
+  id: string;
+  name: string;
+  isLive: boolean;
+  isPinned: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  items: BackendMediaItem[];
+}
+
+export interface PresignedUploadResponse {
+  itemId: string;
+  uploadUrl: string;
+  fileKey: string;
+  readUrl: string;
+  fileName: string;
+  expiresInSeconds: number;
+}
+
+// --- Guest Message ---
+
 export interface GuestMessage {
   id: string;
   name: string;
   content: string;
   timestamp: number;
+  pictureUrl?: string;
 }
+
+// --- Voting ---
 
 export interface Voter {
   id: string;
@@ -28,17 +75,35 @@ export interface Voter {
   choice: string;
 }
 
-export interface VoteOption {
+export interface EligibleParticipant {
+  voteId: string;
+  lineUserId: string;
+  lineDisplayName: string;
+  optionKey: string;
+}
+
+export interface DrawWinner {
   id: string;
+  lineUserId: string;
+  lineDisplayName: string;
+  optionKey: string;
+  drawnAt: string;
+  isActive: boolean;
+}
+
+export interface VoteOption {
+  key: string;
   label: string;
   color: string;
   count: number;
+  percentage: number;
 }
 
 // --- WebSocket Event Types ---
 
 export type WsEventType =
   | 'message:new'
+  | 'vote:update'
   | 'vote:cast'
   | 'vote:reset'
   | 'control:sync'
@@ -54,6 +119,12 @@ export interface WsMessagePayload {
   name: string;
   content: string;
   timestamp: number;
+  pictureUrl?: string;
+}
+
+export interface WsVoteUpdatePayload {
+  options: VoteOption[];
+  totalVotes: number;
 }
 
 export interface WsVoteCastPayload {
@@ -78,24 +149,9 @@ export interface WsMediaUpdatePayload {
   schemes: Record<SchemeId, MediaItem[]>;
 }
 
-// --- API Response Types ---
+// --- Legacy types kept for internal state ---
 
 export interface MediaSchemeData {
   schemeIds: SchemeId[];
   schemes: Record<SchemeId, MediaItem[]>;
-}
-
-export interface PresignedUploadItem {
-  uploadUrl: string;
-  mediaItem: MediaItem;
-}
-
-export interface PresignedUploadResponse {
-  items: PresignedUploadItem[];
-}
-
-export interface DisplaySettings {
-  showWallMessages?: boolean;
-  slideshowSpeed?: number;
-  messageScrollSpeed?: number;
 }
